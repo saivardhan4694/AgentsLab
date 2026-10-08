@@ -81,6 +81,18 @@ uv run python -m agentlab.recorder golden list
 
 On the Runs page you can **replay** a run (re-run with the recorded tool results, so only the model varies), **fork** it with an edited task or tool result, **compare** two runs side by side, and **save a run as a golden** regression test. "Run all" replays every golden and flags any whose tool-call path changed.
 
+## Arena
+
+Measures how well Gateway defenses stop prompt injection, and what they cost in usefulness. Fake in-process scenario servers (inbox, bank, files) with planted data, a judge that checks each fake server's final state, and a matrix of attack cases x defenses (`none`, `sanitizer`, `spotlighting`, `tool_gating`), with a no-attack baseline and several trials per cell.
+
+```bash
+uv run python -m agentlab.arena --trials 5 --out arena-results.md
+```
+
+Or use the Arena page in the UI. Each trial is recorded, so the Runs page (filter "Arena") shows why an attack worked.
+
+To use a defense in real sessions, list it in a profile: `plugins: [spotlighting]` (generic plugins are in `src/agentlab/gateway/plugins.py`).
+
 ## Add installed programs as tools
 
 ```bash

@@ -69,7 +69,21 @@ class Gateway:
     audit: AuditLog | None = None
     client: str = "stdio"
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
-    plugins: list[Plugin] = field(default_factory=list)
+    plugins: list[Plugin] = field(default_factory=list)  # empty: built from the profile's `plugins:` list
+
+    def __post_init__(self) -> None:
+        # A caller that passes its own plugins (the Arena, per defense under test) keeps them.
+        names = self.engine.profile.plugins
+        if self.plugins or not names:
+            return
+        from agentlab.gateway.plugins import PLUGINS, build_plugins  # plugins.py imports this module
+
+        unknown = [n for n in names if n not in PLUGINS]
+        if unknown:
+            raise ValueError(f"Profile {self.engine.profile.name}: unknown plugins {unknown}; "
+                             f"known: {sorted(PLUGINS)}")
+        # Fresh instances per pipeline, so plugin state stays per client session.
+        self.plugins = build_plugins(names)
 
     def visible(self, name: str) -> bool:
         resolved = self.registry.resolve(name)

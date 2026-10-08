@@ -153,3 +153,21 @@ async def test_plugins_only_see_calls_the_policy_allows(tmp_path, agentlab_home)
             denied = await client.call_tool("fs__delete", {"path": str(work)})  # default deny
     assert denied.is_error
     assert plugin.seen == ["fs__stat"]
+
+
+async def test_profile_plugins_apply_to_real_sessions(tmp_path, agentlab_home):
+    from dataclasses import replace
+
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "a.txt").write_text("hello", encoding="utf-8")
+    spotlit = replace(profile(({"tool": "fs__read_file"}, "allow")), plugins=["spotlighting"])
+    async with Registry([ServerEntry("fs", fs.create_server(roots=[work]))]) as registry:
+        gw = Gateway(registry, PolicyEngine(spotlit))
+        assert [p.name for p in gw.plugins] == ["spotlighting"]
+        async with Client(create_server(gw)) as client:
+            result = await client.call_tool("fs__read_file", {"path": str(work / "a.txt")})
+        assert "UNTRUSTED_DATA" in result.content[0].text and "hello" in result.content[0].text
+
+        with pytest.raises(ValueError, match="unknown plugins"):
+            Gateway(registry, PolicyEngine(replace(spotlit, plugins=["nope"])))

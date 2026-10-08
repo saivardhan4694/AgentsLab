@@ -40,10 +40,12 @@ Together they cover the agent lifecycle: build an agent with tools, control what
    servers            (ffmpeg, git,      servers             (fake inbox, fake bank)
    fs, shell, ...     winget, ...)       (playwright, ...)
 
-   Gateway --(trace events, HTTP POST)--> Recorder (127.0.0.1:8100)
-   Arena (127.0.0.1:8200) --(Run API + MCP)--> Gateway
+   Agent --(trace JSONL in ~/.agentlab/traces)--> Recorder
+   Arena --(in-process Gateway pipeline per matrix cell)--> fake scenario servers
    Ollama (127.0.0.1:11434) <-- AgentLab agent
-   React UI (127.0.0.1:5173): Gateway, Arena, Recorder pages
+   One process on 127.0.0.1:8000 serves /mcp, the admin API, the Recorder and Arena endpoints,
+   and the React UI (Chat, Approvals, Runs, Arena, Audit, Servers, Policies, Snapshots).
+   (The first design had separate Recorder :8100 and Arena :8200 services; see progress.md.)
 ```
 
 Design rules:
@@ -170,6 +172,10 @@ class Plugin:
     async def before_call(self, ctx, call) -> Decision | None: ...
     async def after_call(self, ctx, call, result) -> Result: ...
 ```
+
+Implemented (simpler, synchronous): `before_call(call) -> ToolCall | CallToolResult` (a result blocks
+the call) and `after_call(call, result) -> CallToolResult`; see `gateway/pipeline.py`. A profile
+turns generic plugins on by name with `plugins: [sanitizer, spotlighting]` (`gateway/plugins.py`).
 
 Arena defenses (injection classifier, spotlighting, taint rules such as "no outbound email after reading untrusted content") are plugins.
 Model-level defenses (`before_model` / `after_model`) live in LangChain middleware inside our own agent, because the Gateway never sees the prompts of outside clients.

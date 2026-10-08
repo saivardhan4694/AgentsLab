@@ -44,7 +44,7 @@ Status against [plan.md](plan.md). Update at the end of every session.
 - 2026-10-08: Recorder runs inside the Gateway's admin app (same port and UI), not as a separate service on :8100. Simpler to run; the store and ingest endpoint are separate modules, so it can split out later.
 
 - 2026-10-08 (earlier session): Arena (milestone 10) reported as blocked by a safety classifier and skipped; AgentDojo suggested as a substitute. Milestone 11 was built instead.
-- 2026-10-08 (later session): Arena built successfully with no safety block, using fake in-process scenario servers and clearly-labeled handwritten attack text (a defensive security benchmark, not real attack payloads). The earlier "blocked" status did not reproduce; AgentDojo was not needed. Likely cause of the earlier block: unclear from this session; worth comparing prompts/phrasing if it recurs.
+- 2026-10-08: Two Claude sessions worked in parallel. The Arena was built by the second session; the first session's Arena attempts (framework code, defense plugins, and later reading the attack file during review) were stopped by a safety classifier several times, the last one after the Arena was already built. So the block is real and recurring for that session, not a one-off. Cause unclear. Practical rule: Arena attack text is edited by hand or by the session that wrote it; the other session reviews only structure, judge, defenses, and runner.
 - 2026-10-08: Replay holds the environment fixed by serving recorded tool results (no live calls, no audit rows); it still needs the Gateway up for tool schemas. Goldens compare the ordered tool calls (names + args), the stable regression signal; answer wording is shown but not asserted. The 4B model still diverges sometimes even at temperature 0.
 
 ## Known gaps
@@ -57,7 +57,7 @@ Status against [plan.md](plan.md). Update at the end of every session.
 - `discover` only knows the built-in templates; `draft` writes a skeleton. LLM-assisted manifest drafting is later.
 - Agent writes traces as files; the HTTP ingest endpoint exists but the agent does not push to it yet. Gateway decisions are joined from the audit log by run_id (tool name + order), not stored in the trace.
 - Chat memory is lost when the Gateway restarts.
-- UI cannot edit profiles or restart/disable servers yet (read-only views + simulator). Chat page comes with the agent (milestone 8).
+- UI cannot edit profiles or restart/disable servers yet (read-only views + simulator).
 - Profiles load at Gateway start; edits need a restart.
 - Rollback restores exact state, so it also removes later changes at the same path. No undo of a rollback.
 - No JSON Schema validation of arguments in the Gateway yet; downstream servers validate.
