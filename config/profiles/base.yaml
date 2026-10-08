@@ -1,0 +1,33 @@
+# Shared guards. Every profile extends this; children cannot override guards.
+guards:
+  - match:
+      any_arg:
+        - "~/.ssh/**"
+        - "~/.gnupg/**"
+        - "~/.aws/**"
+        - "~/.azure/**"
+        - "~/.kube/**"
+        - "~/.docker/config.json"
+        - "~/.git-credentials"
+        - "~/.claude/**"
+        - "**/.env"
+        - "**/.env.*"
+        - "**/*.pem"
+        - "**/*.key"
+        - "**/id_rsa*"
+        - "**/id_ed25519*"
+        - "~/AppData/Roaming/Microsoft/Credentials/**"
+        - "~/AppData/Local/Google/Chrome/User Data/**"
+        - "~/AppData/Local/Microsoft/Edge/User Data/**"
+        - "~/AppData/Roaming/Mozilla/Firefox/Profiles/**"
+    action: deny
+    reason: secrets and credentials are off limits
+  # Shell commands are free text, so path globs cannot see inside them. A keyword check is a
+  # weak extra layer, not a guarantee; the real protection is that shell calls need approval.
+  - match:
+      tool: "shell__*"
+      args: { command: { regex: '(?i)(\.ssh|\.gnupg|\.aws|\.azure|\.kube|\.git-credentials|\.env\b|id_rsa|id_ed25519|\.pem\b|credentials|user data|cookies|login data|vault|keychain|\.claude)' } }
+    action: deny
+    reason: command mentions secrets or credentials
+budgets:
+  "*": { max_per_minute: 120 }

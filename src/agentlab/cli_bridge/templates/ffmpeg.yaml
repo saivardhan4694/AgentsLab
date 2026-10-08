@@ -1,0 +1,14 @@
+name: ffmpeg
+binary: ffmpeg
+description: Convert audio and video
+tools:
+  - name: convert
+    description: Convert a media file; the format follows the output file extension
+    risk: medium
+    timeout_s: 600
+    args:
+      input:     { type: path, must_exist: true }
+      output:    { type: path }
+      overwrite: { type: boolean, default: false }
+    argv: ["-hide_banner", "-nostdin", {when: overwrite, then: ["-y"], else: ["-n"]}, "-i", "{input}", "{output}"]
+    writes: [output]

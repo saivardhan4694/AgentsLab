@@ -1,0 +1,7 @@
+# See what an agent would do. Reads run; everything else is described, not executed.
+extends: base
+rules:
+  - match: { risk: low }
+    action: allow
+  - match: {}
+    action: dry_run

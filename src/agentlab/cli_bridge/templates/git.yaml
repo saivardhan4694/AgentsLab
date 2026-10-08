@@ -1,0 +1,39 @@
+name: git
+binary: git
+description: Git version control
+tools:
+  - name: status
+    description: Show the working tree status of a repository
+    risk: low
+    args:
+      repo: { type: path, must_exist: true, description: Repository folder }
+    argv: ["-C", "{repo}", "status", "--short", "--branch"]
+  - name: log
+    description: Show recent commits, optionally only those touching a path
+    risk: low
+    args:
+      repo:  { type: path, must_exist: true, description: Repository folder }
+      count: { type: integer, default: 20, min: 1, max: 500 }
+      path:  { type: path, required: false, description: Only commits that touch this path }
+    argv: ["-C", "{repo}", "log", "--oneline", "--decorate", "-n", "{count}", {when: path, then: ["--", "{path}"]}]
+  - name: diff
+    description: Show unstaged changes, or staged changes with staged=true
+    risk: low
+    args:
+      repo:   { type: path, must_exist: true, description: Repository folder }
+      staged: { type: boolean, default: false }
+    argv: ["-C", "{repo}", "diff", {when: staged, then: ["--staged"]}]
+  - name: show
+    description: Show one commit
+    risk: low
+    args:
+      repo: { type: path, must_exist: true, description: Repository folder }
+      rev:  { type: string, pattern: "[A-Za-z0-9_./~^-]{1,100}", description: "Commit hash, tag, or branch" }
+    argv: ["-C", "{repo}", "show", "--stat", "{rev}"]
+  - name: commit_all
+    description: Stage all changes and commit them with a message
+    risk: medium
+    args:
+      repo:    { type: path, must_exist: true, description: Repository folder }
+      message: { type: string, max_length: 2000, allow_dash: true }
+    argv: ["-C", "{repo}", "commit", "--all", "--message", "{message}"]

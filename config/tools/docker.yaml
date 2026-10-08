@@ -1,0 +1,27 @@
+name: docker
+binary: docker
+description: Docker containers and images
+tools:
+  - name: ps
+    description: List containers
+    risk: low
+    args:
+      all: { type: boolean, default: false, description: Include stopped containers }
+    argv: ["ps", {when: all, then: ["--all"]}]
+  - name: images
+    description: List images
+    risk: low
+    argv: ["images"]
+  - name: logs
+    description: Show the last lines of a container's logs
+    risk: low
+    args:
+      container: { type: string, pattern: "[A-Za-z0-9][A-Za-z0-9_.-]{0,127}" }
+      tail:      { type: integer, default: 100, min: 1, max: 5000 }
+    argv: ["logs", "--tail", "{tail}", "{container}"]
+  - name: stop
+    description: Stop a running container
+    risk: high
+    args:
+      container: { type: string, pattern: "[A-Za-z0-9][A-Za-z0-9_.-]{0,127}" }
+    argv: ["stop", "{container}"]

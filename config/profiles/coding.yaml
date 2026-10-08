@@ -1,0 +1,27 @@
+# Day-to-day development. Read anywhere (guards still apply), write only in work folders.
+# A move needs both ends inside the folder, so files cannot be moved out of it.
+extends: base
+rules:
+  - match: { risk: low }
+    action: allow
+  - match: { tool: "fs__move", args: { source: "~/agentlab-sandbox/**", destination: "~/agentlab-sandbox/**" } }
+    action: allow
+  - match: { tool: ["fs__write_file", "fs__make_dir", "fs__delete"], args: { path: "~/agentlab-sandbox/**" } }
+    action: allow
+  - match: { tool: "fs__delete" }
+    action: ask
+  - match: { tool: "fs__move", args: { source: "~/repositories/**", destination: "~/repositories/**" } }
+    action: allow_with_snapshot
+  - match: { tool: ["fs__write_file", "fs__make_dir"], args: { path: "~/repositories/**" } }
+    action: allow_with_snapshot
+  # Read-only git commands run without asking. No shell metacharacters, so nothing can be chained on.
+  - match:
+      tool: shell__run_command
+      args: { command: { regex: '^(?!.*--output)git (status|diff|log|show)( [^;&|`$<>(){}\r\n]*)?\Z' } }
+    action: allow
+  - match: { tool: "cli__git_commit_all", args: { repo: "~/repositories/**" } }
+    action: ask
+  - match: { risk: [high, critical] }
+    action: ask
+budgets:
+  fs__delete: { max_per_session: 20 }

@@ -1,0 +1,32 @@
+# Downstream MCP servers the Gateway connects to. Schema: src/agentlab/gateway/config.py
+# Launch with "python -m", not the uv .exe script shims: Windows Smart App Control can block unsigned shims.
+# First-party servers keep their own root folders as a second layer, independent of the policy profiles.
+servers:
+  fs:
+    command: uv
+    args: [run, --quiet, python, -m, agentlab.servers.fs, --root, ~/agentlab-sandbox, --root, ~/repositories]
+    cwd: ..
+    timeout: 30
+    writes:
+      write_file: [path]
+      make_dir: [path]
+      move: [source, destination]
+      delete: [path]
+  system:
+    command: uv
+    args: [run, --quiet, python, -m, agentlab.servers.system]
+    cwd: ..
+    timeout: 30
+  shell:
+    command: uv
+    args: [run, --quiet, python, -m, agentlab.servers.shell, --root, ~/agentlab-sandbox, --root, ~/repositories]
+    cwd: ..
+    timeout: 620  # above the tool's own 600 s cap
+    risk: { run_command: critical }
+  cli:
+    command: uv
+    args: [run, --quiet, python, -m, agentlab.cli_bridge, serve, --manifests, config/tools,
+           --root, ~/agentlab-sandbox, --root, ~/repositories]
+    cwd: ..
+    timeout: 620
+    trust_meta: true  # first-party: manifests state each tool's risk and writes

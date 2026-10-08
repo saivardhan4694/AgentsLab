@@ -1,0 +1,6 @@
+# Look, do not touch. Tools above low risk are hidden.
+extends: base
+visible_risk: [low]
+rules:
+  - match: { risk: low }
+    action: allow

@@ -1,0 +1,5 @@
+# Opt-in. Everything allowed except the base guards. Use with care.
+extends: base
+rules:
+  - match: {}
+    action: allow

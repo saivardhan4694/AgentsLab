@@ -1,0 +1,33 @@
+name: winget
+binary: winget
+description: Windows package manager
+tools:
+  - name: search
+    description: Search for installable packages
+    risk: low
+    timeout_s: 120
+    args:
+      query: { type: string, max_length: 100 }
+    argv: ["search", "--query", "{query}", "--accept-source-agreements", "--disable-interactivity"]
+  - name: list
+    description: List installed packages, optionally filtered by name
+    risk: low
+    timeout_s: 120
+    args:
+      query: { type: string, required: false, max_length: 100 }
+    argv: ["list", {when: query, then: ["--query", "{query}"]}, "--accept-source-agreements", "--disable-interactivity"]
+  - name: install
+    description: Install a package by its exact winget id
+    risk: high
+    timeout_s: 600
+    args:
+      id: { type: string, pattern: "[A-Za-z0-9][A-Za-z0-9_.+-]{0,127}", description: "Exact package id, from search" }
+    argv: ["install", "--id", "{id}", "--exact", "--silent", "--accept-package-agreements",
+           "--accept-source-agreements", "--disable-interactivity"]
+  - name: uninstall
+    description: Uninstall a package by its exact winget id
+    risk: critical
+    timeout_s: 600
+    args:
+      id: { type: string, pattern: "[A-Za-z0-9][A-Za-z0-9_.+-]{0,127}" }
+    argv: ["uninstall", "--id", "{id}", "--exact", "--silent", "--disable-interactivity"]

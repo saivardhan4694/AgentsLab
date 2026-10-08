@@ -1,0 +1,36 @@
+[project]
+name = "agentlab"
+version = "0.1.0"
+description = "Local platform for running tool-using AI agents safely, red-teaming them, and debugging them"
+readme = "README.md"
+authors = [
+    { name = "Sai Vardhan Makkapati", email = "makkapatimrk@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.142.4",
+    "langchain>=1.3.2",
+    "langchain-ollama>=1.1.0",
+    "langgraph>=1.2.2",
+    "mcp>=2.3.0",
+    "psutil>=7.2.2",
+    "pyyaml>=6.0.3",
+    "websockets>=17.2",
+]
+
+[project.scripts]
+agentlab-fs = "agentlab.servers.fs:main"
+agentlab-system = "agentlab.servers.system:main"
+agentlab-gateway = "agentlab.gateway.server:main"
+
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

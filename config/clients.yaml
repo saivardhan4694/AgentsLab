@@ -1,0 +1,9 @@
+# HTTP clients of the Gateway. Each token maps to one client and one profile.
+# Make a token: python -m agentlab.gateway.clients new-token
+# Then set the environment variable before starting the Gateway, or paste the hash as token_sha256.
+allowed_origins: ["http://127.0.0.1:5173", "http://localhost:5173"]  # the React UI (milestone 7)
+clients:
+  cursor:   { token_env: AL_TOKEN_CURSOR, profile: coding }
+  vscode:   { token_env: AL_TOKEN_VSCODE, profile: coding }
+  my-agent: { token_env: AL_TOKEN_AGENT,  profile: coding }  # the chat agent in the UI
+  arena:    { token_env: AL_TOKEN_ARENA,  profile: dry-run }  # until the arena-defender profile exists
