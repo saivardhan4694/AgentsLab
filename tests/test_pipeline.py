@@ -126,3 +126,30 @@ def test_answer_after_expiry_is_rejected(agentlab_home):
     assert store.decide(a, "expired")
     assert not store.decide(a, "approved")
     assert store.get(a).status == "expired"
+
+
+class RecordingPlugin:
+    name = "recording"
+
+    def __init__(self):
+        self.seen: list[str] = []
+
+    def before_call(self, call):
+        self.seen.append(call.tool)
+        return call
+
+    def after_call(self, call, result):
+        return result
+
+
+async def test_plugins_only_see_calls_the_policy_allows(tmp_path, agentlab_home):
+    work = tmp_path / "w"
+    work.mkdir()
+    plugin = RecordingPlugin()
+    async with Registry([ServerEntry("fs", fs.create_server(roots=[work]))]) as registry:
+        gw = Gateway(registry, PolicyEngine(profile(({"tool": "fs__stat"}, "allow"))), plugins=[plugin])
+        async with Client(create_server(gw)) as client:
+            await client.call_tool("fs__stat", {"path": str(work)})
+            denied = await client.call_tool("fs__delete", {"path": str(work)})  # default deny
+    assert denied.is_error
+    assert plugin.seen == ["fs__stat"]

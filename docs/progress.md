@@ -16,7 +16,9 @@ Status against [plan.md](plan.md). Update at the end of every session.
 | 7 | done | `gateway/api.py` (FastAPI admin API + `/api/ws` live feed + serves `ui/dist`; `Router` sends `/mcp` to the MCP app; admin token from `AL_ADMIN_TOKEN` or `~/.agentlab/admin_token`; TrustedHost + WebSocket Origin check). `ui/` (Vite + React + TS, no UI library): Approvals (live, edit args), Audit (live, filter, details), Servers, Policies (rules + simulator), Snapshots (rollback). API tested; UI built and served, not yet clicked through in a browser |
 | 8 | done | `agent/` (LangChain `create_agent` + `ChatOllama` qwen3.5:4b, 16k ctx; own MCP-to-LangChain adapter `mcp_tools.py`; `tracing.py` callback; CLI `python -m agentlab.agent`); `shared/trace.py` (TraceEvent, JSONL in `~/.agentlab/traces/`); `/api/chat` (NDJSON stream) + Chat page. Verified with real Ollama: list+read sandbox file, git status, ~5 s each |
 | 9 | done | `recorder/store.py` (SQLite `recorder.db`, incremental JSONL ingest, HTTP ingest, run summaries), `/api/runs`, `/api/runs/{id}`, `/api/recorder/events`; CLI `python -m agentlab.recorder list/show`; Runs page (run list + timeline with latency waterfall, prompts, thinking, Gateway decision per tool step). Agent sends `agentlab/run_id` in MCP `_meta`; audit stores it (`run_id` column, auto-migrated). Verified with real Ollama + screenshots (light/dark) |
-| 10-12 | pending | |
+| 10 | done | Arena. `gateway/pipeline.py` gained the `Plugin` hook (`before_call`/`after_call`, design.md 4.4 step 5 and 9; `before_call` only runs for allow/ask/allow_with_snapshot, so a denied call cannot affect a stateful plugin). `gateway/plugins.py` holds the generic result filters (`none`, `sanitizer`, `spotlighting`); `Profile` gained a `plugins: list[str]` field (union across `extends`), so real sessions (stdio/HTTP) can turn these on too, not just the Arena. `arena/scenarios/` (inbox, bank, files: in-process fake MCP servers + state); `arena/attacks.py` (12 handwritten attacks: direct, indirect, tool-poisoning, exfiltration); `arena/defenses.py` (reuses the generic plugins, adds the scenario-specific `tool_gating`); `arena/judge.py`; `arena/runner.py` (matrix runner: a no-attack baseline cell per scenario plus N independent trials per cell at temperature 0, Markdown export, CLI `python -m agentlab.arena --trials`). API: `/api/arena/attacks\|defenses\|run\|status\|report` (lazy imports, async `run`, task kept on `AdminState.arena_task`). Arena page (scenario/defenses/trials, run, poll, per-defense rate table, sanitizer cost note). Runs tagged `meta={"arena": {...}}` show up on the Runs page per milestone 11's tagging. Verified with a scripted model (`tests/test_arena.py`), not yet run against real Ollama. Built without hitting a safety block; see the note below about the earlier "blocked" status. |
+| 11 | done | Recorder replay/fork/diff/golden. `recorder/replay.py` (ReplayClient substitutes recorded tool results; fork edits message/system-prompt/results), `recorder/diff.py` (LCS alignment of decision paths), `recorder/golden.py` (regression suite). Agent gained `mcp_client` + run `meta`. API: replay, diff, goldens CRUD + run. CLI: diff, golden. UI: Runs actions bar, fork panel, diff view, Goldens panel. Replays/goldens run at temperature 0. Verified end to end with Ollama + screenshots |
+| 12 | pending | |
 
 ## Decisions and changes
 
@@ -41,6 +43,10 @@ Status against [plan.md](plan.md). Update at the end of every session.
 
 - 2026-10-08: Recorder runs inside the Gateway's admin app (same port and UI), not as a separate service on :8100. Simpler to run; the store and ingest endpoint are separate modules, so it can split out later.
 
+- 2026-10-08 (earlier session): Arena (milestone 10) reported as blocked by a safety classifier and skipped; AgentDojo suggested as a substitute. Milestone 11 was built instead.
+- 2026-10-08 (later session): Arena built successfully with no safety block, using fake in-process scenario servers and clearly-labeled handwritten attack text (a defensive security benchmark, not real attack payloads). The earlier "blocked" status did not reproduce; AgentDojo was not needed. Likely cause of the earlier block: unclear from this session; worth comparing prompts/phrasing if it recurs.
+- 2026-10-08: Replay holds the environment fixed by serving recorded tool results (no live calls, no audit rows); it still needs the Gateway up for tool schemas. Goldens compare the ordered tool calls (names + args), the stable regression signal; answer wording is shown but not asserted. The 4B model still diverges sometimes even at temperature 0.
+
 ## Known gaps
 
 - Path guards only see path arguments. Shell commands get a keyword guard only; real protection is that shell needs approval except read-only `git` commands (coding profile).
@@ -57,6 +63,15 @@ Status against [plan.md](plan.md). Update at the end of every session.
 - No JSON Schema validation of arguments in the Gateway yet; downstream servers validate.
 - `fs__search` can list file names inside guarded folders (contents stay blocked).
 
+Arena-specific:
+- `tool_gating` still needs scenario-supplied `untrusted_tools`/`sensitive_tools` lists, so it is not in `gateway/plugins.py`'s generic registry a real profile can pick from yet. A risk/annotation-driven version (gate high/critical-risk tools after any open-world read) would generalize it.
+- `sanitizer`'s patterns are broad by design and will also redact ordinary phrasing (e.g. "you must reply by Friday"); the Arena report calls this out, but the patterns themselves are not tuned.
+- Default 5 trials per cell is a guess, not a calibrated number; real-Ollama variance (temperature 0, but a 4B model still diverges) hasn't been measured yet.
+- 12 handwritten attacks across 3 scenarios is a small, illustrative set, not a benchmark. A larger or standard set (e.g. AgentDojo) would give more confidence in the numbers.
+- Not yet run against real Ollama end to end, only against a scripted model in tests.
+
 ## Next
 
-Milestone 10: Arena v1. Fake scenario MCP servers (inbox, bank, files) with planted data, 10-15 handwritten prompt-injection attacks, defenses as Gateway plugins (none, sanitizer, spotlighting, tool gating), rule-based judge (attack success + task success), matrix runner, results table (Markdown export) and an Arena page. Needs a plugin hook in the pipeline (design.md section 4.3 plugin interface). Design: design.md section 5.
+Arena v1 (milestone 10) is built; run it against real Ollama to see real attack/defense numbers (so far only exercised with a scripted model in tests). Consider adding AgentDojo as a second, larger attack set later rather than as a replacement.
+
+Remaining: Milestone 12 (polish: per-part READMEs, architecture diagram, demo GIFs). Earlier Gateway gaps: edit profiles in the UI, enable/restart servers, downstream servers by URL, approvals via MCP elicitation.

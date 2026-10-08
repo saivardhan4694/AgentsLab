@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, getToken, liveSocket, setToken, takeTokenFromUrl } from "./api";
 import type { Approval, AuditRow, Overview } from "./api";
 import { ApprovalsPage } from "./pages/Approvals";
+import { ArenaPage } from "./pages/Arena";
 import { AuditPage } from "./pages/Audit";
 import { ChatPage } from "./pages/Chat";
 import { PoliciesPage } from "./pages/Policies";
@@ -9,7 +10,7 @@ import { RunsPage } from "./pages/Runs";
 import { ServersPage } from "./pages/Servers";
 import { SnapshotsPage } from "./pages/Snapshots";
 
-const PAGES = ["Chat", "Approvals", "Runs", "Audit", "Servers", "Policies", "Snapshots"] as const;
+const PAGES = ["Chat", "Approvals", "Runs", "Arena", "Audit", "Servers", "Policies", "Snapshots"] as const;
 type Page = (typeof PAGES)[number];
 
 takeTokenFromUrl();
@@ -115,6 +116,7 @@ function Shell({ overview }: { overview: Overview | null }) {
         </div>
         {page === "Approvals" && <ApprovalsPage pending={pending} />}
         {page === "Runs" && <RunsPage />}
+        {page === "Arena" && <ArenaPage />}
         {page === "Audit" && <AuditPage rows={audit} />}
         {page === "Servers" && <ServersPage />}
         {page === "Policies" && <PoliciesPage />}

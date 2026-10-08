@@ -159,6 +159,27 @@ async def test_mcp_still_served_through_router(gateway):
     assert "fs__read_file" in names
 
 
+async def test_diff_and_goldens_endpoints(gateway, agentlab_home):
+    _, api, _ = gateway
+    w = TraceWriter("g1", agentlab_home / "traces")
+    w.emit("run_start", {"message": "stat it", "model": "x"})
+    w.emit("llm_call", {"response": {"role": "ai", "tool_calls": [{"name": "fs__stat", "args": {}}]}})
+    w.emit("tool_call", {"tool": "fs__stat", "args": {}}, parent_step=2)
+    w.emit("tool_result", {"content": "ok", "is_error": False}, parent_step=3)
+    w.emit("llm_call", {"response": {"role": "ai", "content": "done"}})
+    w.emit("run_end", {"answer": "done"})
+
+    d = (await api.get("/api/runs/g1/diff/g1")).json()
+    assert d["same_tool_path"] and all(r["status"] == "same" for r in d["rows"])
+    assert (await api.get("/api/runs/g1/diff/nope")).status_code == 404
+
+    gid = (await api.post("/api/goldens", json={"run_id": "g1", "label": "stat"})).json()["id"]
+    [g] = (await api.get("/api/goldens")).json()
+    assert g["id"] == gid and g["expected"]["tool_path"]
+    assert (await api.delete(f"/api/goldens/{gid}")).status_code == 200
+    assert (await api.get("/api/goldens")).json() == []
+
+
 async def test_runs_endpoints(gateway, agentlab_home):
     _, api, _ = gateway
     w = TraceWriter("run1", agentlab_home / "traces")
@@ -171,3 +192,29 @@ async def test_runs_endpoints(gateway, agentlab_home):
     assert [e["type"] for e in detail["events"]] == ["run_start", "tool_call", "run_end"]
     assert detail["events"][1]["gateway"] is None  # no audit row for this fake run
     assert (await api.get("/api/runs/nope")).status_code == 404
+
+
+async def test_arena_run_starts_in_background_and_rejects_overlap(gateway, monkeypatch):
+    import agentlab.arena.runner as runner
+
+    release = anyio.Event()
+
+    async def fake_matrix(state, attacks, defenses, trials=1):
+        state.running, state.total = True, len(attacks) * len(defenses)
+        await release.wait()
+        state.done, state.running = state.total, False
+
+    monkeypatch.setattr(runner, "run_matrix_into", fake_matrix)
+    _, api, _ = gateway
+    started = await api.post("/api/arena/run", json={"scenario": "inbox", "defenses": ["none"]})
+    assert started.status_code == 200 and started.json()["started"]
+    assert (await api.post("/api/arena/run", json={})).status_code == 409  # one matrix at a time
+
+    release.set()
+    for _ in range(50):
+        status = (await api.get("/api/arena/status")).json()
+        if not status["running"]:
+            break
+        await anyio.sleep(0.05)
+    assert not status["running"] and status["done"] == status["total"] > 0
+    assert (await api.post("/api/arena/run", json={"scenario": "nope"})).status_code == 404

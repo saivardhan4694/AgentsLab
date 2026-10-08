@@ -18,11 +18,17 @@ rules:                            # checked after guards; child rules come befor
 budgets:
   fs__delete: { max_per_session: 20 }
   "*":        { max_per_minute: 60 }
+plugins: [sanitizer, spotlighting]   # result filters from gateway/plugins.py; union across the extends chain
 ```
 
 Match keys (all given keys must match): `tool` (glob or list), `risk` (level or list),
 `args` (argument name to matcher, see matching.py), `any_arg` (matcher tried on every string argument).
 The first matching guard or rule wins. No match means deny.
+
+`plugins` names Gateway plugins (`gateway/plugins.py`'s `PLUGINS`) to run for every call under this
+profile: the same `before_call`/`after_call` hooks the Arena uses to test defenses, now available to
+real sessions. Unknown names are only caught when `gateway/plugins.build_plugins` builds them (at
+Gateway construction), not at profile load, to avoid a load-time dependency on that module.
 """
 
 import time
@@ -88,6 +94,7 @@ class Profile:
     guards: list[Rule]
     rules: list[Rule]
     budgets: list[Budget]
+    plugins: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -160,7 +167,7 @@ def load_profiles(folder: Path) -> dict[str, Profile]:
         if name not in raw:
             raise ValueError(f"Unknown profile {name!r}" + (f" (extended by {chain[-1]})" if chain else ""))
         data = raw[name]
-        unknown = set(data) - {"extends", "visible", "visible_risk", "guards", "rules", "budgets"}
+        unknown = set(data) - {"extends", "visible", "visible_risk", "guards", "rules", "budgets", "plugins"}
         if unknown:
             raise ValueError(f"Profile {name}: unknown keys {sorted(unknown)}")
         parents_names = data.get("extends") or []
@@ -179,6 +186,8 @@ def load_profiles(folder: Path) -> dict[str, Profile]:
         budgets = {b.pattern: b for p in parents for b in p.budgets}
         for pattern, spec in (data.get("budgets") or {}).items():
             budgets[pattern] = Budget(pattern, spec.get("max_per_session"), spec.get("max_per_minute"))
+        # Union, order preserved: a child adds plugins on top of its parents', never removes one.
+        plugins = list(dict.fromkeys([p for parent in parents for p in parent.plugins] + list(data.get("plugins") or [])))
 
         profile = Profile(
             name=name,
@@ -187,6 +196,7 @@ def load_profiles(folder: Path) -> dict[str, Profile]:
             guards=_dedupe([g for p in parents for g in p.guards] + _rules(name, "guards", data.get("guards"))),
             rules=_dedupe(_rules(name, "rules", data.get("rules")) + [r for p in parents for r in p.rules]),
             budgets=list(budgets.values()),
+            plugins=plugins,
         )
         resolved[name] = profile
         return profile

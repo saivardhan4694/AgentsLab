@@ -1,6 +1,7 @@
 """The request pipeline for one `tools/call` (design.md section 4.4).
 
-visibility -> policy decision (rules, budgets) -> approval if `ask` -> snapshot -> forward -> audit.
+visibility -> policy decision (rules, budgets) -> plugin before_call -> approval if `ask` ->
+snapshot -> forward -> plugin after_call (result filters) -> audit.
 Every non-allowed path returns a tool error, so the LLM learns why and can choose another way.
 """
 
@@ -9,7 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from mcp import StdioServerParameters
 from mcp.types import CallToolResult, Tool
@@ -26,6 +27,36 @@ APPROVAL_TIMEOUT_S = 120
 META_RUN_ID = "agentlab/run_id"  # request _meta key: the caller's trace run, stored in the audit log
 
 
+@runtime_checkable
+class Plugin(Protocol):
+    """A Gateway plugin (the Arena's defenses; see design.md section 5).
+
+    `before_call` runs after rules and budgets, before approval; returning a `CallToolResult`
+    blocks the call (recorded as denied). `after_call` runs on the downstream result, before
+    audit: the "result filters" step in design.md 4.4 (redact, truncate, wrap untrusted content).
+    One plugin instance per session, so it may hold state (for example "has this session seen
+    untrusted content yet").
+    """
+
+    name: str
+
+    def before_call(self, call: ToolCall) -> "ToolCall | CallToolResult": ...
+
+    def after_call(self, call: ToolCall, result: CallToolResult) -> CallToolResult: ...
+
+
+class BasePlugin:
+    """Plugin base with no-op hooks, so a defense only overrides what it needs."""
+
+    name = "base"
+
+    def before_call(self, call: ToolCall) -> "ToolCall | CallToolResult":
+        return call
+
+    def after_call(self, call: ToolCall, result: CallToolResult) -> CallToolResult:
+        return result
+
+
 @dataclass
 class Gateway:
     """The pipeline for one upstream client: its policy engine (and budgets), session, and stores."""
@@ -38,6 +69,7 @@ class Gateway:
     audit: AuditLog | None = None
     client: str = "stdio"
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    plugins: list[Plugin] = field(default_factory=list)
 
     def visible(self, name: str) -> bool:
         resolved = self.registry.resolve(name)
@@ -74,6 +106,15 @@ class Gateway:
         rec.rule = decision.rule.source if decision.rule else None
         log.info("[%s] %s risk=%s -> %s (%s)", self.client, call.tool, call.risk, decision.action, decision.reason)
         action = decision.action
+
+        # Plugins only see calls the policy would let run; a denied call never reaches them,
+        # so stateful plugins (for example taint tracking) are not changed by it.
+        for plugin in self.plugins if action in ("allow", "ask", "allow_with_snapshot") else []:
+            verdict = plugin.before_call(call)
+            if isinstance(verdict, CallToolResult):
+                rec.decision, rec.reason = "deny", f"blocked by plugin {plugin.name}"
+                return verdict
+            call = verdict
 
         if action == "ask":
             if self.approvals is None:
@@ -114,6 +155,8 @@ class Gateway:
                 log.warning("Snapshot for %s failed, running without one: %s", call.tool, e)
 
         result = await self.registry.call_tool(name, call.args)
+        for plugin in self.plugins:
+            result = plugin.after_call(call, result)
         rec.outcome = "tool_error" if result.is_error else "ok"
         if rec.snapshot:
             result.meta = {**(result.meta or {}), "agentlab/snapshot": rec.snapshot}
