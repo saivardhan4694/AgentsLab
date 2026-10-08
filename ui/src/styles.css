@@ -178,3 +178,19 @@ details pre { margin: 6px 0; max-height: 240px; }
 .track:hover .bar { filter: brightness(1.1); }
 .msg { margin: 6px 0; }
 .msg pre { margin: 2px 0; }
+
+/* Runs: fork, diff, goldens */
+.override { margin: 6px 0; }
+.override code { display: inline-block; margin-bottom: 2px; }
+.diff-head { align-items: stretch; gap: 12px; margin-bottom: 8px; }
+.diff-head > div { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.diff-row { display: grid; grid-template-columns: 24px 1fr 1fr; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.diff-row:last-child { border-bottom: 0; }
+.diff-mark { color: var(--muted); text-align: center; }
+.diff-cell { min-width: 0; overflow-wrap: anywhere; }
+.diff-row.changed { background: var(--medium); }
+.diff-row.changed .diff-mark { color: var(--medium-t); }
+.diff-row.only_a { background: var(--high); }
+.diff-row.only_b { background: var(--low); }
+button.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.tag-arena { background: var(--medium); color: var(--medium-t); margin-left: 4px; }

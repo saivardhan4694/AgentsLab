@@ -67,19 +67,21 @@ class Agent:
     config: AgentConfig = field(default_factory=AgentConfig)
     model: BaseChatModel | None = None  # tests pass a fake model
     gateway: Any = None  # anything mcp.Client accepts; default: the Gateway URL with the agent token
+    mcp_client: Any = None  # a ready client-like object used as-is (the Recorder's replay client)
     checkpointer: InMemorySaver = field(default_factory=InMemorySaver)
 
-    async def run(self, message: str, thread_id: str | None = None) -> AsyncIterator[dict[str, Any]]:
+    async def run(self, message: str, thread_id: str | None = None,
+                  meta: dict[str, Any] | None = None) -> AsyncIterator[dict[str, Any]]:
         """Stream one turn as events: run_start, thinking, token, tool_call, tool_result, done, error."""
         thread_id = thread_id or uuid.uuid4().hex
         run_id = uuid.uuid4().hex[:12]
         writer = TraceWriter(run_id)
-        writer.emit("run_start", {"thread_id": thread_id, "message": message, "model": self.config.model})
+        writer.emit("run_start", {"thread_id": thread_id, "message": message, "model": self.config.model, **(meta or {})})
         yield {"type": "run_start", "run_id": run_id, "thread_id": thread_id}
         final = ""
         token = current_run.set(run_id)
         try:
-            client = Client(self.gateway) if self.gateway is not None else self.config.gateway_client()
+            client = self.mcp_client or (Client(self.gateway) if self.gateway is not None else self.config.gateway_client())
             async with client:
                 tools = await load_tools(client)
                 agent = create_agent(self.model or self.config.chat_model(), tools,

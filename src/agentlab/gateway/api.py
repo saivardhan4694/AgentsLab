@@ -11,20 +11,21 @@ Approvals and audit rows are read from the shared SQLite files, so the UI also s
 stdio Gateways that Claude Desktop starts.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
 import os
 import secrets
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import anyio
 import httpx2
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.lowlevel import Server
 from pydantic import BaseModel
@@ -37,7 +38,10 @@ from agentlab.gateway.pipeline import Gateway
 from agentlab.gateway.policy.engine import PolicyEngine, Profile, Rule, ToolCall
 from agentlab.gateway.registry import Registry, tool_risk
 from agentlab.gateway.snapshots import SnapshotError, SnapshotStore
-from agentlab.recorder.store import RecorderStore, attach_audit
+from agentlab.recorder.diff import diff_runs
+from agentlab.recorder.golden import expected_from_run, run_suite
+from agentlab.recorder.replay import ForkSpec, replay
+from agentlab.recorder.store import KINDS, RecorderStore, attach_audit
 from agentlab.shared.home import agentlab_home
 from agentlab.shared.trace import TraceEvent
 
@@ -72,6 +76,8 @@ class AdminState:
     recorder: RecorderStore | None = None
     agent: Any = None  # agentlab.agent.Agent, when the agent has a Gateway token
     agent_problem: str | None = None  # why the chat is unavailable
+    arena: Any = None  # agentlab.arena.runner.ArenaRunState, created on first use
+    arena_task: Any = None  # the running matrix task, kept so it is not garbage-collected
 
     @property
     def token_sha256(self) -> str:
@@ -99,11 +105,28 @@ class ChatRequest(BaseModel):
     thread_id: str | None = None
 
 
+class ReplayRequest(BaseModel):
+    message: str | None = None
+    system_prompt: str | None = None
+    result_overrides: dict[str, dict[str, Any]] | None = None  # tool_call step -> {content, is_error}
+
+
+class GoldenRequest(BaseModel):
+    run_id: str
+    label: str
+
+
 class SimulateRequest(BaseModel):
     profile: str
     tool: str
     args: dict[str, Any] = {}
     risk: str | None = None
+
+
+class ArenaRunRequest(BaseModel):
+    scenario: str | None = None
+    defenses: list[str] | None = None
+    trials: int = 5
 
 
 def _rule(r: Rule) -> dict[str, Any]:
@@ -118,6 +141,7 @@ def _profile(p: Profile) -> dict[str, Any]:
         "guards": [_rule(r) for r in p.guards],
         "rules": [_rule(r) for r in p.rules],
         "budgets": [asdict(b) for b in p.budgets],
+        "plugins": p.plugins,
     }
 
 
@@ -222,10 +246,13 @@ def create_admin_app(state: AdminState, lifespan: Any = None) -> FastAPI:
         return state.recorder
 
     @app.get("/api/runs", dependencies=admin)
-    def runs(limit: int = Query(100, le=1000), status: str | None = None, q: str | None = None) -> list[dict[str, Any]]:
+    def runs(limit: int = Query(100, le=1000), status: str | None = None, q: str | None = None,
+             kind: str | None = None) -> list[dict[str, Any]]:
+        if kind is not None and kind not in KINDS:
+            raise HTTPException(422, f"kind must be one of {KINDS}")
         store = recorder()
         store.ingest_folder()
-        return store.runs(limit, status, q)
+        return store.runs(limit, status, q, kind)
 
     @app.get("/api/runs/{run_id}", dependencies=admin)
     def run(run_id: str) -> dict[str, Any]:
@@ -240,6 +267,125 @@ def create_admin_app(state: AdminState, lifespan: Any = None) -> FastAPI:
     @app.post("/api/recorder/events", dependencies=admin)
     def ingest(events: list[TraceEvent]) -> dict[str, int]:
         return {"stored": recorder().add_events(events)}
+
+    @app.get("/api/runs/{run_a}/diff/{run_b}", dependencies=admin)
+    def diff(run_a: str, run_b: str) -> dict[str, Any]:
+        store = recorder()
+        store.ingest_folder()
+        a, b = store.run(run_a), store.run(run_b)
+        if a is None or b is None:
+            raise HTTPException(404, "run not found")
+        return diff_runs(a, b)
+
+    def fresh_agent() -> Any:
+        from agentlab.agent.agent import Agent
+
+        if state.agent is None:
+            raise HTTPException(503, state.agent_problem or "agent unavailable")
+        # Temperature 0 for replays and goldens, to make them as reproducible as the model allows.
+        return Agent(replace(state.agent.config, temperature=0.0))
+
+    def inner_client() -> Any:
+        return state.agent.config.gateway_client()
+
+    @app.post("/api/runs/{run_id}/replay", dependencies=admin)
+    async def replay_run(run_id: str, body: ReplayRequest) -> dict[str, Any]:
+        store = recorder()
+        store.ingest_folder()
+        if store.run(run_id) is None:
+            raise HTTPException(404, f"no run {run_id}")
+        fork = ForkSpec(message=body.message, system_prompt=body.system_prompt,
+                        result_overrides={int(k): v for k, v in (body.result_overrides or {}).items()})
+        try:
+            result = await replay(store, run_id, fresh_agent(), inner_client(), fork)
+        except Exception as e:  # noqa: BLE001 - surface the failure to the UI
+            raise HTTPException(500, f"{type(e).__name__}: {e}") from e
+        store.ingest_folder()
+        return {"run_id": result.run_id, "is_fork": result.is_fork, "unmatched": result.unmatched}
+
+    @app.get("/api/goldens", dependencies=admin)
+    def goldens() -> list[dict[str, Any]]:
+        return recorder().goldens()
+
+    @app.post("/api/goldens", dependencies=admin)
+    def add_golden(body: GoldenRequest) -> dict[str, Any]:
+        store = recorder()
+        store.ingest_folder()
+        run = store.run(body.run_id)
+        if run is None:
+            raise HTTPException(404, f"no run {body.run_id}")
+        return {"id": store.save_golden(body.run_id, body.label, expected_from_run(run))}
+
+    @app.delete("/api/goldens/{golden_id}", dependencies=admin)
+    def remove_golden(golden_id: str) -> dict[str, Any]:
+        if not recorder().delete_golden(golden_id):
+            raise HTTPException(404, f"no golden {golden_id}")
+        return {"deleted": golden_id}
+
+    @app.post("/api/goldens/run", dependencies=admin)
+    async def run_goldens() -> list[dict[str, Any]]:
+        return await run_suite(recorder(), fresh_agent, inner_client)
+
+    # Arena. Imported lazily: it pulls in the agent (LangChain), which plain Gateway use does not need.
+
+    def arena_state() -> Any:
+        from agentlab.arena.runner import ArenaRunState
+
+        if state.arena is None:
+            state.arena = ArenaRunState()
+        return state.arena
+
+    @app.get("/api/arena/attacks", dependencies=admin)
+    def arena_attacks() -> list[dict[str, Any]]:
+        from agentlab.arena.attacks import ATTACKS
+
+        return [asdict(a) for a in ATTACKS]
+
+    @app.get("/api/arena/defenses", dependencies=admin)
+    def arena_defenses() -> list[str]:
+        from agentlab.arena.defenses import DEFENSES
+
+        return list(DEFENSES)
+
+    @app.post("/api/arena/run", dependencies=admin)
+    async def arena_run(body: ArenaRunRequest) -> dict[str, Any]:
+        # async def, so it runs on the event loop and can start a background task there.
+        from agentlab.arena.attacks import ATTACKS
+        from agentlab.arena.defenses import DEFENSES
+        from agentlab.arena.runner import run_matrix_into
+        from agentlab.arena.scenarios import SCENARIOS
+
+        arena = arena_state()
+        if arena.running:
+            raise HTTPException(409, "a matrix run is already in progress")
+        if body.scenario is not None and body.scenario not in SCENARIOS:
+            raise HTTPException(404, f"unknown scenario {body.scenario}")
+        unknown = set(body.defenses or []) - set(DEFENSES)
+        if unknown:
+            raise HTTPException(404, f"unknown defenses {sorted(unknown)}")
+        if body.trials < 1:
+            raise HTTPException(422, "trials must be at least 1")
+        attacks = [a for a in ATTACKS if a.scenario == body.scenario] if body.scenario else ATTACKS
+        defenses = body.defenses or list(DEFENSES)
+        arena.running = True  # set now, so a second request cannot start before the task does
+        # Keep a reference: the event loop holds tasks weakly, and an unreferenced task can be collected.
+        state.arena_task = asyncio.create_task(run_matrix_into(arena, attacks, defenses, body.trials))
+        return {"started": True, "trials": body.trials}
+
+    @app.get("/api/arena/status", dependencies=admin)
+    def arena_status() -> dict[str, Any]:
+        arena = arena_state()
+        return {"running": arena.running, "done": arena.done, "total": arena.total,
+                "error": arena.error, "results": [asdict(r) for r in arena.results]}
+
+    @app.get("/api/arena/report", dependencies=admin)
+    def arena_report() -> PlainTextResponse:
+        from agentlab.arena.runner import to_markdown
+
+        arena = arena_state()
+        if not arena.results:
+            raise HTTPException(404, "no results yet; run the matrix first")
+        return PlainTextResponse(to_markdown(arena.results), media_type="text/markdown")
 
     @app.get("/api/chat/status", dependencies=admin)
     async def chat_status() -> dict[str, Any]:

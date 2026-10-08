@@ -69,3 +69,36 @@ def test_http_ingest_is_idempotent(agentlab_home):
     store.add_events(events)
     assert len(store.run("r2")["events"]) == 2
     assert json.dumps(store.runs()[0]["answer"]) == '"a"'
+
+
+def test_runs_are_tagged_and_filtered_by_kind(agentlab_home):
+    traces = agentlab_home / "traces"
+    for run_id, extra in [("chat1", {}), ("arena1", {"arena": {"scenario": "inbox", "defense": "none", "trial": 0}}),
+                          ("rep1", {"replay_of": "chat1"}), ("fork1", {"forked_from": "chat1"})]:
+        w = TraceWriter(run_id, traces)
+        w.emit("run_start", {"message": run_id, **extra})
+        w.emit("run_end", {"answer": "ok"})
+    store = RecorderStore(agentlab_home)
+    store.ingest_folder()
+
+    def ids(kind):
+        return sorted(r["run_id"] for r in store.runs(kind=kind))
+
+    assert ids("chat") == ["chat1"]
+    assert ids("arena") == ["arena1"]
+    assert ids("replay") == ["fork1", "rep1"]
+    assert len(ids(None)) == 4
+    assert store.run("arena1")["tags"]["arena"]["scenario"] == "inbox"
+
+
+def test_old_recorder_db_gains_tags_column(agentlab_home):
+    import sqlite3
+
+    w = TraceWriter("old1", agentlab_home / "traces")
+    w.emit("run_start", {"message": "m", "replay_of": "x"})
+    w.emit("run_end", {"answer": "a"})
+    RecorderStore(agentlab_home).ingest_folder()
+    with sqlite3.connect(agentlab_home / "recorder.db") as db:  # simulate a database from before run tags
+        db.execute("ALTER TABLE runs DROP COLUMN meta_json")
+    store = RecorderStore(agentlab_home)
+    assert store.run("old1")["tags"] == {"replay_of": "x"}

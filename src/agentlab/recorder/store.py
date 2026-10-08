@@ -28,11 +28,18 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY, thread_id TEXT, started_at TEXT, ended_at TEXT, model TEXT, message TEXT,
     answer TEXT, status TEXT, steps INTEGER, llm_calls INTEGER, tool_calls INTEGER, tool_errors INTEGER,
-    errors INTEGER, tokens_in INTEGER, tokens_out INTEGER, duration_ms INTEGER
+    errors INTEGER, tokens_in INTEGER, tokens_out INTEGER, duration_ms INTEGER, meta_json TEXT
 );
 CREATE TABLE IF NOT EXISTS ingest_offsets (file TEXT PRIMARY KEY, offset INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS goldens (
+    id TEXT PRIMARY KEY, run_id TEXT NOT NULL, label TEXT, created TEXT NOT NULL,
+    message TEXT, expected_json TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at);
 """
+# run_start keys copied into the run summary as tags, so runs can be filtered by where they came from
+RUN_TAGS = ("arena", "replay_of", "forked_from")
+KINDS = ("chat", "arena", "replay")
 
 
 class RecorderStore:
@@ -43,6 +50,10 @@ class RecorderStore:
         self.traces = home / "traces"
         with self._db() as db:
             db.executescript(SCHEMA)
+            if "meta_json" not in {r["name"] for r in db.execute("PRAGMA table_info(runs)")}:
+                db.execute("ALTER TABLE runs ADD COLUMN meta_json TEXT")  # recorder.db from before run tags
+                for (run_id,) in db.execute("SELECT run_id FROM runs").fetchall():
+                    self._summarize(db, run_id)  # fill in tags for runs recorded before the column existed
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
@@ -103,17 +114,27 @@ class RecorderStore:
         status = "running" if end is None else ("error" if errors else "ok")
         duration = round((datetime.fromisoformat(last["ts"]) - datetime.fromisoformat(first["ts"])).total_seconds() * 1000)
         db.execute(
-            "INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (run_id, start.get("thread_id"), first["ts"], last["ts"] if end is not None else None, start.get("model"),
              start.get("message"), (end or {}).get("answer"), status, len(rows),
              sum(r["type"] == "llm_call" for r in rows), sum(r["type"] == "tool_call" for r in rows), tool_errors,
-             errors, sum(r["tokens_in"] or 0 for r in rows), sum(r["tokens_out"] or 0 for r in rows), duration),
+             errors, sum(r["tokens_in"] or 0 for r in rows), sum(r["tokens_out"] or 0 for r in rows), duration,
+             json.dumps({k: start[k] for k in RUN_TAGS if k in start}, default=str)),
         )
 
     # Read
 
-    def runs(self, limit: int = 100, status: str | None = None, search: str | None = None) -> list[dict[str, Any]]:
+    def runs(self, limit: int = 100, status: str | None = None, search: str | None = None,
+             kind: str | None = None) -> list[dict[str, Any]]:
+        """Newest first. `kind`: "arena" (Arena matrix cells), "replay" (replays and forks), "chat" (neither)."""
         where, params = [], []
+        if kind == "arena":
+            where.append("json_extract(meta_json, '$.arena') IS NOT NULL")
+        elif kind == "replay":
+            where.append("(json_extract(meta_json, '$.replay_of') IS NOT NULL"
+                         " OR json_extract(meta_json, '$.forked_from') IS NOT NULL)")
+        elif kind == "chat":
+            where.append("(meta_json IS NULL OR meta_json = '{}')")
         if status:
             where.append("status = ?")
             params.append(status)
@@ -122,7 +143,7 @@ class RecorderStore:
             params += [f"%{search}%"] * 2
         sql = "SELECT * FROM runs" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY started_at DESC LIMIT ?"
         with self._db() as db:
-            return [dict(r) for r in db.execute(sql, (*params, limit))]
+            return [_with_tags(dict(r)) for r in db.execute(sql, (*params, limit))]
 
     def run(self, run_id: str) -> dict[str, Any] | None:
         with self._db() as db:
@@ -132,7 +153,48 @@ class RecorderStore:
             events = [dict(r) for r in db.execute("SELECT * FROM events WHERE run_id = ? ORDER BY step", (run_id,))]
         for e in events:
             e["payload"] = json.loads(e.pop("payload_json"))
-        return {**dict(row), "events": events}
+        return {**_with_tags(dict(row)), "events": events}
+
+
+    # Golden runs (regression baselines)
+
+    def save_golden(self, run_id: str, label: str, expected: dict[str, Any]) -> str:
+        import uuid
+
+        run = self.run(run_id)
+        if run is None:
+            raise ValueError(f"no run {run_id}")
+        golden_id = uuid.uuid4().hex[:8]
+        with self._db() as db:
+            db.execute("INSERT INTO goldens VALUES (?, ?, ?, ?, ?, ?)",
+                       (golden_id, run_id, label, datetime.now().astimezone().isoformat(),
+                        run.get("message"), json.dumps(expected, default=str)))
+        return golden_id
+
+    def goldens(self) -> list[dict[str, Any]]:
+        with self._db() as db:
+            rows = [dict(r) for r in db.execute("SELECT * FROM goldens ORDER BY created DESC")]
+        for r in rows:
+            r["expected"] = json.loads(r.pop("expected_json"))
+        return rows
+
+    def get_golden(self, golden_id: str) -> dict[str, Any] | None:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM goldens WHERE id = ?", (golden_id,)).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["expected"] = json.loads(out.pop("expected_json"))
+        return out
+
+    def delete_golden(self, golden_id: str) -> bool:
+        with self._db() as db:
+            return db.execute("DELETE FROM goldens WHERE id = ?", (golden_id,)).rowcount == 1
+
+
+def _with_tags(row: dict[str, Any]) -> dict[str, Any]:
+    row["tags"] = json.loads(row.pop("meta_json", None) or "{}")
+    return row
 
 
 def attach_audit(run: dict[str, Any], audit_rows: list[dict[str, Any]]) -> None:

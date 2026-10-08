@@ -178,6 +178,8 @@ export type RunSummary = {
   tokens_in: number;
   tokens_out: number;
   duration_ms: number;
+  // Where the run came from, copied from its run_start event (Recorder RUN_TAGS).
+  tags: { arena?: Record<string, unknown>; replay_of?: string; forked_from?: string };
 };
 
 export type TraceEventRow = {
@@ -194,3 +196,26 @@ export type TraceEventRow = {
 };
 
 export type RunDetail = RunSummary & { events: TraceEventRow[] };
+
+export type Golden = { id: string; run_id: string; label: string; created: string; message: string | null; expected: { tool_path: string[]; answer: string | null } };
+export type GoldenRunResult = { golden_id: string; label: string; source_run_id: string; new_run_id?: string; passed: boolean; expected_tool_path?: string[]; actual_tool_path?: string[]; unmatched?: string[]; error?: string };
+
+export type DiffNode = { kind: "model" | "tool"; summary: string; signature: string; detail: Record<string, any> };
+export type DiffRow = { status: "same" | "changed" | "only_a" | "only_b"; a: DiffNode | null; b: DiffNode | null };
+export type DiffSide = { run_id: string; status: string; steps: number; tokens: number; duration_ms: number; answer: string | null };
+export type DiffResult = { a: DiffSide; b: DiffSide; same_tool_path: boolean; rows: DiffRow[] };
+
+export type ArenaAttack = { id: string; scenario: string; category: string; place: "data" | "prompt"; description: string; payload: string };
+
+export type MatrixResult = {
+  scenario: string;
+  attack_id: string; // "baseline" for the no-attack row
+  category: string; // "none" for baseline
+  defense: string;
+  trials: number;
+  attack_successes: number;
+  task_successes: number;
+  errors: string[];
+};
+
+export type ArenaStatus = { running: boolean; done: number; total: number; error: string | null; results: MatrixResult[] };

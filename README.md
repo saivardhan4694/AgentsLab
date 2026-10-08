@@ -75,7 +75,11 @@ The Runs page shows every agent run as a timeline: each model call (prompt, thin
 ```bash
 uv run python -m agentlab.recorder list
 uv run python -m agentlab.recorder show <run_id>
+uv run python -m agentlab.recorder diff <run_a> <run_b>
+uv run python -m agentlab.recorder golden list
 ```
+
+On the Runs page you can **replay** a run (re-run with the recorded tool results, so only the model varies), **fork** it with an edited task or tool result, **compare** two runs side by side, and **save a run as a golden** regression test. "Run all" replays every golden and flags any whose tool-call path changed.
 
 ## Add installed programs as tools
 
